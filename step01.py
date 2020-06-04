@@ -30,8 +30,7 @@ g_difficulty = 2
 g_maximumTry = 100
 g_nodeList = {'trustedServerAddress':'8666'} # trusted server list, should be checked manually
 
-# 개선 2. while문 탈출조건 추가
-
+# 개선 1. getBlockData 끊어서 불러오기
 class Block:
 
     def __init__(self, index, previousHash, timestamp, data, currentHash, proof ):
@@ -116,38 +115,29 @@ def writeBlockchain(blockchain):
         pass
         #return
     # [END] check current db(csv)
-        # 개선 2. 파일이 열리지 않으면 while문 계속 돈다. 다른 탈출 조건도 필요
-        # 개선 방안: 탈출 조건 추가 - tryCnt >= 10 | openFile == True | emptyFile == True
-        openFile = False
-        emptyFile = False  # blockchainList != []
-        tryCnt = 0  # 파일 여는 시도 횟수
-
-        while ((not openFile) & (tryCnt < 10) & (not emptyFile)):
-            if blockchainList != []:
-                try:
-                    with open(g_bcFileName, "w", newline='') as file:
-                        writer = csv.writer(file)
-                        writer.writerows(blockchainList)
-                        blockchainList.clear()
-                        print("write ok")
-                        openFile = True
-                        for block in blockchain:
-                            updateTx(block)
+    openFile = False
+    while not openFile:
+        if blockchainList != []:
+            try:
+                lock.acquire()
+                with open(g_bcFileName, "w", newline='') as file:
+                    writer = csv.writer(file)
+                    writer.writerows(blockchainList)
+                    blockchainList.clear()
+                    print("write ok")
+                    openFile = True
+                    for block in blockchain:
+                        updateTx(block)
                     print('Blockchain written to blockchain.csv.')
                     print('Broadcasting new block to other nodes')
                     broadcastNewBlock(blockchain)
                     lock.release()
-                except:
+            except:
                     time.sleep(3)
-                    # 파일 여는 시도 횟수가 10번이 넘으면 print문 찍어주고 while문 탈출
-                    tryCnt += 1
-                    if tryCnt == 10:
-                        print("Error: a limit for attempts to open a file / Fail to genesisNewBlock")
+                    print("writeBlockchain file open error")
                     lock.release()
-            else:
-                # blockchainList == []: file에 write해줄 필요 없음 / 에러 사유 찍어주고 emptyFile = True로 바로 탈출
-                print("Blockchain is empty")
-                emptyFile = True
+        else:
+            print("Blockchain is empty")
 
 def readBlockchain(blockchainFilePath, mode = 'internal'):
     print("readBlockchain")
@@ -706,18 +696,34 @@ class myHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
             if None != re.search('/block/getBlockData', self.path):
-                # TODO: range return (~/block/getBlockData?from=1&to=300)
-                # queryString = urlparse(self.path).query.split('&')
+                # 개선 1. TODO: range return (~/block/getBlockData?from=1&to=300) / 함수구현
+                # 1. & 구분자로 split할 query가 있다면 try문을 돎
+                try:
+                    # 1-1. 불러올 block의 index를 pasing해서 startPoint와 endPoint로 저장
+                    queryString = urlparse(self.path).query.split('&')
+                    startPoint = int(queryString[0].split('=')[1]) - 1
+                    endPoint = int(queryString[1].split('=')[1])
 
-                block = readBlockchain(g_bcFileName, mode='external')
+                    block = readBlockchain(g_bcFileName, mode='external')
 
-                if block == None:
-                    print("No Block Exists")
-                    data.append("no data exists")
-                else:
-                    for i in block:
-                        print(i.__dict__)
-                        data.append(i.__dict__)
+                    if block == None:
+                        print("No Block Exists")
+                        data.append("no data exists")
+                    else:
+                        for i in range(startPoint, endPoint):
+                            print(block[i].__dict__)
+                            data.append(block[i].__dict__)
+                # 2. url에 불러올 block을 기재하지 않은 경우, 블록 전체를 불러옴
+                except:
+                    block = readBlockchain(g_bcFileName, mode='external')
+
+                    if block == None:
+                        print("No Block Exists")
+                        data.append("no data exists")
+                    else:
+                        for i in block:
+                            print(i.__dict__)
+                            data.append(i.__dict__)
 
                 self.wfile.write(bytes(json.dumps(data, sort_keys=True, indent=4), "utf-8"))
 
